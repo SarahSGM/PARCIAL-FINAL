@@ -12,6 +12,10 @@ from sklearn.impute import KNNImputer
 from sklearn.preprocessing import LabelEncoder
 import warnings
 warnings.filterwarnings('ignore')
+# SOLUCIÓN DE EMERGENCIA - ELIMINA ESTO LUEGO DE FUNCIONE
+import subprocess
+import sys
+subprocess.check_call([sys.executable, "-m", "pip", "install", "scikit-learn==1.3.0"])
 
 # =============================================================================
 # CONFIGURACIÓN DE LA PÁGINA Y ESTILOS CSS
@@ -1453,46 +1457,145 @@ elif page == "🔍 Análisis Demográfico":
     else:
         st.warning("No hay datos de ingresos disponibles para el análisis.")
 
-# PÁGINA: PARTICIPACIÓN CULTURAL
-elif page == "🎪 Participación Cultural":
-    st.markdown('<div class="section-header"><h2>🎪 Análisis de Participación Cultural</h2></div>', unsafe_allow_html=True)
-    
-    # Mapa de calor de participación
-    st.markdown('<div class="plot-container">', unsafe_allow_html=True)
-    st.subheader("🔥 Mapa de Calor: Participación Cultural por Demografía")
-    
-    # Verificar si hay datos suficientes para el mapa de calor
-    if not df['grupo_edad'].isna().all() and not df['NIVEL EDUCATIVO'].isna().all() and not df['indice_cultural'].isna().all():
-        # Crear matriz de participación ponderada por FACTOR DE EXPANSION
-        # Usar una función de agregación que pondere los valores del índice cultural
-        participation_matrix = df.groupby(['grupo_edad', 'NIVEL EDUCATIVO']).apply(
-            lambda x: np.average(x['indice_cultural'], weights=x['FACTOR DE EXPANSION'])
-        ).reset_index(name='indice_cultural_ponderado')
-        
-        # Verificar si hay suficientes datos después del groupby
-        if not participation_matrix.empty:
-            participation_pivot = participation_matrix.pivot(
-                index='grupo_edad', 
-                columns='NIVEL EDUCATIVO', 
-                values='indice_cultural_ponderado'
-            )
-            
-            fig = px.imshow(participation_pivot,
-                        color_continuous_scale='Purples',
-                        aspect="auto",
-                        title="Participación Cultural Ponderada por Factor de Expansión")
-            fig.update_layout(
-                xaxis_title="Nivel Educativo",
-                yaxis_title="Grupo de Edad",
-                font=dict(size=12)
-            )
-            st.plotly_chart(fig, use_container_width=True)
+import pandas as pd
+import numpy as np
+import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+from scipy.stats import chi2_contingency
+from scipy.stats.contingency import association
+import warnings
+warnings.filterwarnings('ignore')
+
+def cramers_v(x, y, weights=None):
+    """
+    Calcula el coeficiente de Cramér's V para variables categóricas
+    con soporte para pesos (factor de expansión)
+    """
+    try:
+        if weights is not None:
+            # Crear tabla de contingencia ponderada
+            crosstab = pd.crosstab(x, y, weights, aggfunc='sum')
         else:
-            st.warning("No hay suficientes datos para generar el mapa de calor.")
-    else:
-        st.warning("Faltan datos necesarios para el mapa de calor de participación cultural.")
-    st.markdown('</div>', unsafe_allow_html=True)
+            crosstab = pd.crosstab(x, y)
+        
+        # Verificar que la tabla no esté vacía
+        if crosstab.empty or crosstab.sum().sum() == 0:
+            return 0.0
+        
+        # Calcular chi-cuadrado
+        chi2, _, _, _ = chi2_contingency(crosstab)
+        n = crosstab.sum().sum()
+        
+        # Calcular Cramér's V
+        min_dim = min(crosstab.shape[0] - 1, crosstab.shape[1] - 1)
+        if min_dim == 0:
+            return 0.0
+        
+        cramers_v = np.sqrt(chi2 / (n * min_dim))
+        return min(cramers_v, 1.0)  # Limitar a 1.0
+    except:
+        return 0.0
+
+def calculate_association_matrix(df, variables, weights=None):
+    """
+    Calcula matriz de asociación para variables categóricas
+    """
+    n_vars = len(variables)
+    association_matrix = np.zeros((n_vars, n_vars))
     
+    for i, var1 in enumerate(variables):
+        for j, var2 in enumerate(variables):
+            if i == j:
+                association_matrix[i, j] = 1.0
+            elif i < j:  # Solo calcular la mitad superior
+                # Remover valores nulos
+                valid_mask = df[var1].notna() & df[var2].notna()
+                if weights is not None:
+                    valid_mask = valid_mask & df[weights].notna()
+                
+                if valid_mask.sum() > 0:
+                    x = df.loc[valid_mask, var1]
+                    y = df.loc[valid_mask, var2]
+                    w = df.loc[valid_mask, weights] if weights is not None else None
+                    
+                    assoc_value = cramers_v(x, y, w)
+                    association_matrix[i, j] = assoc_value
+                    association_matrix[j, i] = assoc_value  # Matriz simétrica
+    
+    return association_matrix
+
+import pandas as pd
+import numpy as np
+import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+from scipy.stats import chi2_contingency
+from scipy.stats.contingency import association
+import warnings
+warnings.filterwarnings('ignore')
+
+def cramers_v(x, y, weights=None):
+    """
+    Calcula el coeficiente de Cramér's V para variables categóricas
+    con soporte para pesos (factor de expansión)
+    """
+    try:
+        if weights is not None:
+            # Crear tabla de contingencia ponderada
+            crosstab = pd.crosstab(x, y, weights, aggfunc='sum')
+        else:
+            crosstab = pd.crosstab(x, y)
+        
+        # Verificar que la tabla no esté vacía
+        if crosstab.empty or crosstab.sum().sum() == 0:
+            return 0.0
+        
+        # Calcular chi-cuadrado
+        chi2, _, _, _ = chi2_contingency(crosstab)
+        n = crosstab.sum().sum()
+        
+        # Calcular Cramér's V
+        min_dim = min(crosstab.shape[0] - 1, crosstab.shape[1] - 1)
+        if min_dim == 0:
+            return 0.0
+        
+        cramers_v = np.sqrt(chi2 / (n * min_dim))
+        return min(cramers_v, 1.0)  # Limitar a 1.0
+    except:
+        return 0.0
+
+def calculate_association_matrix(df, variables, weights=None):
+    """
+    Calcula matriz de asociación para variables categóricas
+    """
+    n_vars = len(variables)
+    association_matrix = np.zeros((n_vars, n_vars))
+    
+    for i, var1 in enumerate(variables):
+        for j, var2 in enumerate(variables):
+            if i == j:
+                association_matrix[i, j] = 1.0
+            elif i < j:  # Solo calcular la mitad superior
+                # Remover valores nulos
+                valid_mask = df[var1].notna() & df[var2].notna()
+                if weights is not None:
+                    valid_mask = valid_mask & df[weights].notna()
+                
+                if valid_mask.sum() > 0:
+                    x = df.loc[valid_mask, var1]
+                    y = df.loc[valid_mask, var2]
+                    w = df.loc[valid_mask, weights] if weights is not None else None
+                    
+                    assoc_value = cramers_v(x, y, w)
+                    association_matrix[i, j] = assoc_value
+                    association_matrix[j, i] = assoc_value  # Matriz simétrica
+    
+    return association_matrix
+
+# PÁGINA: PARTICIPACIÓN CULTURAL
+if page == "🎪 Participación Cultural":
+    st.markdown('<div class="section-header"><h2>🎪 Análisis de Participación Cultural</h2></div>', unsafe_allow_html=True)
     # Análisis por género
     col1, col2 = st.columns(2)
     
@@ -1607,67 +1710,181 @@ elif page == "🎪 Participación Cultural":
             st.warning("Faltan datos de etnia o participación cultural.")
         st.markdown('</div>', unsafe_allow_html=True)
     
-    # Análisis de correlaciones
+    # Análisis de asociaciones para variables categóricas
     st.markdown('<div class="plot-container">', unsafe_allow_html=True)
-    st.subheader("🔗 Matriz de Correlaciones: Actividades Culturales")
+    st.subheader("🔗 Matriz de Asociaciones: Actividades Culturales")
+    st.markdown("*Usando Coeficiente de Cramér's V para variables categóricas*")
     
-    # Seleccionar solo variables numéricas de actividades culturales
-    cultural_numeric_vars = [col for col in df.columns if col.lower().endswith('_num') and 
-                          ('asistencia' in col.lower() or 'p3' in col.lower() or 
-                           'p4' in col.lower() or 'p5' in col.lower())]
+    # Identificar variables culturales categóricas
+    cultural_categorical_vars = []
     
-    # Verificar que hay suficientes variables para la correlación
-    if len(cultural_numeric_vars) >= 2:
-        # Asegurarse de que hay datos suficientes
-        valid_data = df[cultural_numeric_vars + ['FACTOR DE EXPANSION']].dropna()
+    # Variables de asistencia (P2)
+    asistencia_vars = [col for col in df.columns if col.lower().startswith('asistencia')]
+    cultural_categorical_vars.extend(asistencia_vars)
+    
+    # Variables de frecuencia de actividades (P3, P4, P5)
+    frecuencia_vars = [col for col in df.columns if any(x in col.lower() for x in ['p3', 'p4', 'p5']) 
+                       and not col.lower().endswith('_num')]
+    cultural_categorical_vars.extend(frecuencia_vars)
+    
+    # Variables de práctica cultural
+    practica_vars = [col for col in df.columns if 'practica' in col.lower() and 'cultural' in col.lower()]
+    cultural_categorical_vars.extend(practica_vars)
+    
+    # Variables de lectura
+    lectura_vars = [col for col in df.columns if 'lectura' in col.lower() and not col.lower().endswith('_num')]
+    cultural_categorical_vars.extend(lectura_vars)
+    
+    # Remover duplicados y verificar que existen en el DataFrame
+    cultural_categorical_vars = list(set([var for var in cultural_categorical_vars if var in df.columns]))
+    
+    if len(cultural_categorical_vars) >= 2:
+        # Filtrar variables con suficiente variación
+        valid_vars = []
+        for var in cultural_categorical_vars:
+            if df[var].nunique() > 1 and df[var].notna().sum() > 10:
+                valid_vars.append(var)
         
-        if not valid_data.empty and valid_data.shape[0] > 1:
-            # Calcular correlaciones ponderadas por FACTOR DE EXPANSION
-            # Esta es una aproximación ya que la correlación ponderada es más compleja
-            # Se usa una matriz de correlación estándar pero se pondera cada observación
+        if len(valid_vars) >= 2:
+            # Limitar a máximo 10 variables para mejor visualización
+            if len(valid_vars) > 10:
+                # Seleccionar las variables con mayor variación
+                var_info = [(var, df[var].nunique()) for var in valid_vars]
+                var_info.sort(key=lambda x: x[1], reverse=True)
+                valid_vars = [var for var, _ in var_info[:10]]
             
-            # Normalizar pesos
-            weights = valid_data['FACTOR DE EXPANSION'] / valid_data['FACTOR DE EXPANSION'].sum()
+            st.info(f"Analizando {len(valid_vars)} variables culturales categóricas")
             
-            # Aplicar pesos a las variables
-            weighted_data = valid_data[cultural_numeric_vars].mul(weights, axis=0)
-            
-            # Calcular correlación en los datos ponderados
-            correlation_matrix = weighted_data.corr()
-            
-            # Crear nombres más legibles
-            new_names = {
-                'p3_num': 'Teatro/Danza',
-                'p4_num': 'Conciertos',
-                'p5_num': 'Música en Bares',
-                'asistencia biblioteca_num': 'Bibliotecas',
-                'asistencia casas de cultura_num': 'Casas de Cultura',
-                'asistencia centros cuturales_num': 'Centros Culturales',
-                'asistencia museos_num': 'Museos',
-                'asistencia exposiciones_num': 'Exposiciones',
-                'asistencia monumentos_num': 'Monumentos',
-                'asistencia cursos_num': 'Cursos',
-                'practica cultural_num': 'Práctica Cultural',
-                'lectura libros_num': 'Lectura'
-            }
-            
-            correlation_matrix.index = [new_names.get(idx.lower(), idx) for idx in correlation_matrix.index]
-            correlation_matrix.columns = [new_names.get(col.lower(), col) for col in correlation_matrix.columns]
-            
-            fig = px.imshow(correlation_matrix,
-                   color_continuous_scale='Purples',
-                   aspect="auto",
-                   title="Correlaciones Ponderadas por Factor de Expansión")
-            fig.update_layout(
-                width=800,
-                height=600,
-                font=dict(size=10)
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            # Calcular matriz de asociación
+            try:
+                association_matrix = calculate_association_matrix(df, valid_vars, 'FACTOR DE EXPANSION')
+                
+                # Crear nombres más legibles y únicos
+                readable_names = []
+                name_counts = {}
+                
+                for var in valid_vars:
+                    if 'asistencia' in var.lower():
+                        base_name = var.replace('ASISTENCIA ', '').replace('_', ' ').title()
+                        if 'biblioteca' in var.lower():
+                            name = 'Bibliotecas'
+                        elif 'museo' in var.lower():
+                            name = 'Museos'
+                        elif 'casa' in var.lower():
+                            name = 'Casas de Cultura'
+                        elif 'centro' in var.lower():
+                            name = 'Centros Culturales'
+                        elif 'exposicion' in var.lower():
+                            name = 'Exposiciones'
+                        elif 'monumento' in var.lower():
+                            name = 'Monumentos'
+                        elif 'curso' in var.lower():
+                            name = 'Cursos'
+                        else:
+                            name = base_name
+                    elif 'p3' in var.lower():
+                        name = 'Teatro/Danza'
+                    elif 'p4' in var.lower():
+                        name = 'Conciertos'
+                    elif 'p5' in var.lower():
+                        name = 'Música en Bares'
+                    elif 'practica' in var.lower():
+                        name = 'Práctica Cultural'
+                    elif 'lectura' in var.lower():
+                        if 'libro' in var.lower():
+                            name = 'Lectura Libros'
+                        elif 'revista' in var.lower():
+                            name = 'Lectura Revistas'
+                        elif 'periodico' in var.lower():
+                            name = 'Lectura Periódicos'
+                        else:
+                            name = f"Lectura ({var.split('_')[-1] if '_' in var else 'General'})"
+                    else:
+                        name = var.replace('_', ' ').title()
+                    
+                    # Asegurar nombres únicos
+                    original_name = name
+                    counter = 1
+                    while name in name_counts:
+                        name = f"{original_name} ({counter})"
+                        counter += 1
+                    
+                    name_counts[name] = True
+                    readable_names.append(name)
+                
+                # Crear DataFrame para la visualización
+                association_df = pd.DataFrame(
+                    association_matrix,
+                    index=readable_names,
+                    columns=readable_names
+                )
+                
+                # Crear heatmap
+                fig = px.imshow(
+                    association_df,
+                    color_continuous_scale='Viridis',
+                    aspect="auto",
+                    title="Matriz de Asociaciones (Cramér's V) - Variables Categóricas<br><sub>Ponderado por Factor de Expansión</sub>",
+                    labels=dict(color="Cramér's V")
+                )
+                
+                fig.update_layout(
+                    width=800,
+                    height=600,
+                    font=dict(size=10),
+                    xaxis_title="",
+                    yaxis_title="",
+                    coloraxis_colorbar=dict(
+                        title="Cramér's V<br>(0 = Sin asociación<br>1 = Asociación perfecta)"
+                    )
+                )
+                
+                # Añadir valores en las celdas
+                fig.update_traces(
+                    texttemplate="%{z:.2f}",
+                    textfont={"size": 8}
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Interpretación
+                st.markdown("### 📊 Interpretación de los Resultados:")
+                st.markdown("""
+                - **Cramér's V = 0**: No hay asociación entre las variables
+                - **Cramér's V = 0.1-0.3**: Asociación débil
+                - **Cramér's V = 0.3-0.6**: Asociación moderada  
+                - **Cramér's V = 0.6-1.0**: Asociación fuerte
+                """)
+                
+                # Mostrar las asociaciones más fuertes
+                upper_triangle = np.triu(association_matrix, k=1)
+                strong_associations = []
+                
+                for i in range(len(valid_vars)):
+                    for j in range(i+1, len(valid_vars)):
+                        if upper_triangle[i, j] > 0.3:  # Asociaciones moderadas o fuertes
+                            strong_associations.append({
+                                'Variable 1': readable_names[i],
+                                'Variable 2': readable_names[j],
+                                'Cramér\'s V': upper_triangle[i, j]
+                            })
+                
+                if strong_associations:
+                    st.markdown("### 🔍 Asociaciones Más Fuertes (Cramér's V > 0.3):")
+                    strong_df = pd.DataFrame(strong_associations)
+                    strong_df = strong_df.sort_values('Cramér\'s V', ascending=False)
+                    st.dataframe(strong_df, use_container_width=True)
+                else:
+                    st.info("No se encontraron asociaciones fuertes (Cramér's V > 0.3) entre las variables analizadas.")
+                    
+            except Exception as e:
+                st.error(f"Error al calcular las asociaciones: {str(e)}")
+                st.info("Esto puede deberse a datos insuficientes o variables con muy poca variación.")
         else:
-            st.warning("No hay suficientes datos para calcular las correlaciones.")
+            st.warning("No hay suficientes variables categóricas con variación para el análisis de asociación.")
     else:
-        st.warning("No hay suficientes variables culturales numéricas para el análisis de correlación.")
+        st.warning("No se encontraron suficientes variables culturales categóricas para el análisis.")
+    
     st.markdown('</div>', unsafe_allow_html=True)
 
 # PÁGINA: ACTIVIDADES ESPECÍFICAS
