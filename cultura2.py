@@ -8,13 +8,9 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from PIL import Image
 import io
-from sklearn.impute import KNNImputer
 from sklearn.preprocessing import LabelEncoder
 import warnings
 warnings.filterwarnings('ignore')
-# SOLUCIÓN DE EMERGENCIA - ELIMINA ESTO LUEGO DE FUNCIONE
-import subprocess
-import sys
 
 # =============================================================================
 # CONFIGURACIÓN DE LA PÁGINA Y ESTILOS CSS
@@ -52,12 +48,6 @@ st.markdown("""
         border-radius: 5px;
         margin: 1rem 0;
     }
-    .sidebar .sidebar-content {
-        background: linear-gradient(180deg, #f8f4ff, #f3e8ff);
-    }
-    .stSelectbox > div > div {
-        background-color: #f8f4ff;
-    }
     .plot-container {
         border: 2px solid #dda0dd;
         border-radius: 10px;
@@ -94,76 +84,49 @@ st.markdown("""
 # =============================================================================
 
 def get_purple_palette(n_colors):
-    """
-    Genera una paleta de colores morados para visualizaciones.
-    
-    Parámetros:
-    -----------
-    n_colors : int
-        Número de colores necesarios para la paleta
-        
-    Retorna:
-    --------
-    list: Lista de códigos de colores hexadecimales en tonos morados
-    """
+    """Genera una paleta de colores morados para visualizaciones."""
     base_colors = ['#6a0dad', '#8a2be2', '#9370db', '#9932cc', '#ba55d3', 
                   '#da70d6', '#dda0dd', '#e6e6fa', '#f8f4ff']
     if n_colors <= len(base_colors):
         return base_colors[:n_colors]
     else:
-        # Si necesitamos más colores, usar interpolación de Plotly
         return px.colors.sample_colorscale('Purples', n_colors)
 
-def limpiar_e_imputar_datos(df, umbral_na=0.30, metodo_numerico='knn', k_neighbors=5):
+def limpiar_datos_categoricos(df, umbral_na=0.30):
     """
     Limpia un DataFrame eliminando variables con exceso de valores faltantes
-    e imputa los valores restantes usando diferentes estrategias.
+    e imputa los valores categóricos restantes.
 
-    EXPLICACIÓN DEL PROCESO:
-    1. Identifica columnas con más del umbral especificado de valores NA
-    2. Elimina estas columnas porque son poco útiles para análisis
-    3. Imputa valores categóricos faltantes con "NO INFORMACION"
-    4. Imputa valores numéricos usando el método seleccionado
+    PROCESO:
+    1. Elimina columnas con más del umbral especificado de valores NA
+    2. Imputa valores categóricos faltantes con "NO INFORMACION"
+    3. Mantiene valores numéricos sin cambios (generalmente completos)
 
     Parámetros:
     -----------
     df : pandas.DataFrame
         DataFrame original a limpiar
     umbral_na : float, default=0.30
-        Proporción máxima de NAs permitida (0.30 = 30%)
-        Columnas con más NAs se eliminan
-    metodo_numerico : str, default='knn'
-        Método para imputar variables numéricas:
-        - 'knn': K-Nearest Neighbors (más sofisticado)
-        - 'mediana': Usar la mediana de cada columna
-        - 'interpolacion': Interpolación lineal
-        - 'forward_fill': Propagar último valor válido
-    k_neighbors : int, default=5
-        Número de vecinos para KNN (solo aplica si metodo_numerico='knn')
-
+        Proporción máxima de NAs permitida para conservar columna
+        
     Retorna:
     --------
     tuple: (DataFrame limpio, diccionario con información del proceso)
     """
     
-    # Crear copia para no modificar el original
     df_limpio = df.copy()
     
-    # Diccionario para registrar todo el proceso de limpieza
     info_limpieza = {
         'forma_original': df.shape,
         'columnas_eliminadas': [],
         'columnas_imputadas_categoricas': [],
-        'columnas_imputadas_numericas': [],
-        'metodo_numerico_usado': metodo_numerico,
         'observaciones': []
     }
 
-    # PASO 1: ANÁLISIS DE VALORES FALTANTES POR COLUMNA
+    # PASO 1: Identificar columnas con exceso de NAs
     na_por_columna = df_limpio.isnull().sum()
     porcentaje_na = (na_por_columna / len(df_limpio)) * 100
     
-    # PASO 2: IDENTIFICAR Y ELIMINAR COLUMNAS CON EXCESO DE NAs
     columnas_a_eliminar = porcentaje_na[porcentaje_na > (umbral_na * 100)].index.tolist()
     
     if columnas_a_eliminar:
@@ -171,168 +134,69 @@ def limpiar_e_imputar_datos(df, umbral_na=0.30, metodo_numerico='knn', k_neighbo
         info_limpieza['columnas_eliminadas'] = columnas_a_eliminar
         info_limpieza['observaciones'].append(f"Eliminadas {len(columnas_a_eliminar)} columnas con >{umbral_na*100}% de NAs")
 
-    # PASO 3: SEPARAR VARIABLES POR TIPO DE DATO
+    # PASO 2: Imputar variables categóricas
     columnas_categoricas = df_limpio.select_dtypes(include=['object', 'category']).columns.tolist()
-    columnas_numericas = df_limpio.select_dtypes(include=[np.number]).columns.tolist()
     
-    info_limpieza['observaciones'].append(f"Identificadas {len(columnas_categoricas)} variables categóricas y {len(columnas_numericas)} numéricas")
-
-    # PASO 4: IMPUTACIÓN DE VARIABLES CATEGÓRICAS
-    # Estrategia: Reemplazar NAs con "NO INFORMACION" para mantener la información
-    # de que el dato no estaba disponible
     for col in columnas_categoricas:
         if df_limpio[col].isnull().sum() > 0:
-            # Manejar columnas categóricas de pandas (tienen categorías predefinidas)
             if df_limpio[col].dtype.name == 'category':
-                # Agregar la nueva categoría si no existe
                 if "NO INFORMACION" not in df_limpio[col].cat.categories:
                     df_limpio[col] = df_limpio[col].cat.add_categories(["NO INFORMACION"])
                 df_limpio[col] = df_limpio[col].fillna("NO INFORMACION")
             else:
-                # Para columnas de texto normales
                 df_limpio[col] = df_limpio[col].fillna("NO INFORMACION")
             
             info_limpieza['columnas_imputadas_categoricas'].append(col)
 
-    # PASO 5: IMPUTACIÓN DE VARIABLES NUMÉRICAS
-    columnas_numericas_con_na = [col for col in columnas_numericas 
-                                if df_limpio[col].isnull().sum() > 0]
-
-    if columnas_numericas_con_na:
-        if metodo_numerico == 'knn':
-            # KNN requiere al menos 2 columnas numéricas para funcionar correctamente
-            if len(columnas_numericas) >= 2:
-                try:
-                    # KNN Imputer usa los k vecinos más cercanos para estimar valores faltantes
-                    imputer = KNNImputer(n_neighbors=min(k_neighbors, len(df_limpio)-1))
-                    df_limpio[columnas_numericas] = imputer.fit_transform(df_limpio[columnas_numericas])
-                    info_limpieza['observaciones'].append(f"KNN aplicado exitosamente con {k_neighbors} vecinos")
-                except Exception as e:
-                    # Si KNN falla, usar mediana como respaldo
-                    info_limpieza['observaciones'].append(f"KNN falló: {str(e)}. Usando mediana como respaldo")
-                    for col in columnas_numericas_con_na:
-                        mediana = df_limpio[col].median()
-                        df_limpio[col] = df_limpio[col].fillna(mediana)
-            else:
-                # Con una sola columna numérica, KNN no es útil
-                info_limpieza['observaciones'].append("Solo 1 columna numérica disponible. Usando mediana")
-                for col in columnas_numericas_con_na:
-                    mediana = df_limpio[col].median()
-                    df_limpio[col] = df_limpio[col].fillna(mediana)
-                    
-        elif metodo_numerico == 'mediana':
-            # Mediana es robusta a valores atípicos
-            for col in columnas_numericas_con_na:
-                mediana = df_limpio[col].median()
-                df_limpio[col] = df_limpio[col].fillna(mediana)
-                
-        elif metodo_numerico == 'interpolacion':
-            # Interpolación lineal - útil para series temporales
-            for col in columnas_numericas_con_na:
-                df_limpio[col] = df_limpio[col].interpolate(method='linear')
-                # Rellenar valores al inicio/final que no se pueden interpolar
-                df_limpio[col] = df_limpio[col].fillna(method='ffill').fillna(method='bfill')
-                
-        elif metodo_numerico == 'forward_fill':
-            # Propagar último valor válido hacia adelante
-            for col in columnas_numericas_con_na:
-                df_limpio[col] = df_limpio[col].fillna(method='ffill').fillna(method='bfill')
-        
-        info_limpieza['columnas_imputadas_numericas'] = columnas_numericas_con_na
-
     info_limpieza['forma_final'] = df_limpio.shape
+    info_limpieza['observaciones'].append(f"Imputadas {len(info_limpieza['columnas_imputadas_categoricas'])} variables categóricas")
     
     return df_limpio, info_limpieza
 
 def mostrar_resultados_limpieza(info_limpieza):
-    """
-    Muestra los resultados del proceso de limpieza en la interfaz de Streamlit.
-    Presenta información clara sobre qué se hizo durante la limpieza.
-    """
+    """Muestra los resultados del proceso de limpieza en Streamlit."""
     st.markdown("### 📊 Resultados de la Limpieza de Datos")
 
-    # Métricas principales
     col1, col2, col3 = st.columns(3)
     
     with col1:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("📋 Filas Originales", f"{info_limpieza['forma_original'][0]:,}")
-        st.metric("📋 Filas Finales", f"{info_limpieza['forma_final'][0]:,}")
-        diferencia_filas = info_limpieza['forma_final'][0] - info_limpieza['forma_original'][0]
-        if diferencia_filas != 0:
-            st.metric("📋 Diferencia", f"{diferencia_filas:+,}")
+        st.metric("📋 Filas", f"{info_limpieza['forma_original'][0]:,} → {info_limpieza['forma_final'][0]:,}")
         st.markdown('</div>', unsafe_allow_html=True)
 
     with col2:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("📊 Columnas Originales", f"{info_limpieza['forma_original'][1]:,}")
-        st.metric("📊 Columnas Finales", f"{info_limpieza['forma_final'][1]:,}")
-        diferencia_cols = info_limpieza['forma_final'][1] - info_limpieza['forma_original'][1]
-        if diferencia_cols != 0:
-            st.metric("📊 Diferencia", f"{diferencia_cols:+,}")
+        st.metric("📊 Columnas", f"{info_limpieza['forma_original'][1]:,} → {info_limpieza['forma_final'][1]:,}")
         st.markdown('</div>', unsafe_allow_html=True)
 
     with col3:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("🔧 Método Numérico", info_limpieza['metodo_numerico_usado'])
-        st.metric("🗑️ Columnas Eliminadas", len(info_limpieza['columnas_eliminadas']))
-        total_imputadas = len(info_limpieza['columnas_imputadas_categoricas']) + len(info_limpieza['columnas_imputadas_numericas'])
-        st.metric("🔧 Columnas Imputadas", total_imputadas)
+        st.metric("🔧 Variables Imputadas", len(info_limpieza['columnas_imputadas_categoricas']))
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Detalles del proceso
     if info_limpieza['columnas_eliminadas']:
         st.markdown('<div class="warning-box">', unsafe_allow_html=True)
-        st.markdown("**🗑️ Columnas Eliminadas (exceso de valores faltantes):**")
+        st.markdown("**🗑️ Columnas Eliminadas:**")
         for i, col in enumerate(info_limpieza['columnas_eliminadas'], 1):
             st.write(f"{i}. {col}")
         st.markdown('</div>', unsafe_allow_html=True)
 
     if info_limpieza['columnas_imputadas_categoricas']:
         st.markdown('<div class="info-box">', unsafe_allow_html=True)
-        st.markdown("**🔤 Columnas Categóricas Imputadas (reemplazadas con 'NO INFORMACION'):**")
+        st.markdown("**🔤 Variables Categóricas Imputadas:**")
         for i, col in enumerate(info_limpieza['columnas_imputadas_categoricas'], 1):
             st.write(f"{i}. {col}")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    if info_limpieza['columnas_imputadas_numericas']:
-        st.markdown('<div class="info-box">', unsafe_allow_html=True)
-        st.markdown(f"**🔢 Columnas Numéricas Imputadas (método: {info_limpieza['metodo_numerico_usado']}):**")
-        for i, col in enumerate(info_limpieza['columnas_imputadas_numericas'], 1):
-            st.write(f"{i}. {col}")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    # Observaciones del proceso
     if info_limpieza['observaciones']:
         st.markdown('<div class="success-box">', unsafe_allow_html=True)
-        st.markdown("**📝 Observaciones del Proceso:**")
+        st.markdown("**📝 Resumen del Proceso:**")
         for i, obs in enumerate(info_limpieza['observaciones'], 1):
             st.write(f"{i}. {obs}")
         st.markdown('</div>', unsafe_allow_html=True)
 
-def analizar_duplicados_detallado(df):
-    """
-    Realiza un análisis detallado de duplicados en el DataFrame.
-    
-    EXPLICACIÓN DE TIPOS DE DUPLICADOS:
-    1. Duplicados completos: Filas idénticas en todas las columnas
-    2. Duplicados parciales: Registros con mismos valores en variables clave
-       (edad, sexo, educación, etc.) pero diferentes en otras variables
-    
-    ¿POR QUÉ ES IMPORTANTE?
-    - Duplicados completos pueden indicar errores de captura de datos
-    - Duplicados parciales pueden ser legítimos (ej: personas con mismas características)
-    - En encuestas, algunos duplicados parciales son esperables
-    
-    Parámetros:
-    -----------
-    df : pandas.DataFrame
-        DataFrame a analizar
-        
-    Retorna:
-    --------
-    dict: Diccionario con información detallada sobre duplicados
-    """
+def analizar_duplicados(df):
+    """Realiza análisis de duplicados completos y parciales."""
     
     info_duplicados = {
         'duplicados_completos': 0,
@@ -341,50 +205,43 @@ def analizar_duplicados_detallado(df):
         'recomendaciones': []
     }
     
-    # ANÁLISIS 1: DUPLICADOS COMPLETOS
-    # Son filas exactamente iguales en todas las columnas
+    # Duplicados completos
     duplicados_completos = df.duplicated().sum()
     info_duplicados['duplicados_completos'] = duplicados_completos
     
     if duplicados_completos > 0:
-        porcentaje_dup_comp = (duplicados_completos / len(df)) * 100
+        porcentaje = (duplicados_completos / len(df)) * 100
         info_duplicados['recomendaciones'].append(
-            f"🚨 CRÍTICO: {duplicados_completos} duplicados completos ({porcentaje_dup_comp:.2f}%) - Revisar proceso de captura de datos"
+            f"🚨 CRÍTICO: {duplicados_completos} duplicados completos ({porcentaje:.2f}%)"
         )
     else:
         info_duplicados['recomendaciones'].append("✅ No hay duplicados completos")
     
-    # ANÁLISIS 2: DUPLICADOS PARCIALES EN VARIABLES CLAVE
-    # Variables que típicamente identifican a una persona única
+    # Duplicados parciales en variables clave
     variables_clave_posibles = [
         'EDAD', 'SEXO', 'NIVEL EDUCATIVO', 'ETNIA', 'ESTRATO', 
-        'DEPARTAMENTO', 'MUNICIPIO', 'ZONA', 'P2'  # P2 podría ser ingreso
+        'DEPARTAMENTO', 'MUNICIPIO', 'ZONA', 'P2'
     ]
     
-    # Encontrar qué variables clave existen en el dataset
     variables_clave_existentes = [var for var in variables_clave_posibles if var in df.columns]
     info_duplicados['variables_clave_encontradas'] = variables_clave_existentes
     
-    if len(variables_clave_existentes) >= 2:  # Necesitamos al menos 2 variables para el análisis
+    if len(variables_clave_existentes) >= 2:
         duplicados_parciales = df.duplicated(subset=variables_clave_existentes).sum()
         info_duplicados['duplicados_parciales'] = duplicados_parciales
         
         if duplicados_parciales > 0:
-            porcentaje_dup_parc = (duplicados_parciales / len(df)) * 100
-            if porcentaje_dup_parc > 20:  # Más del 20% es sospechoso
+            porcentaje = (duplicados_parciales / len(df)) * 100
+            if porcentaje > 20:
                 info_duplicados['recomendaciones'].append(
-                    f"⚠️ ATENCIÓN: {duplicados_parciales} duplicados parciales ({porcentaje_dup_parc:.2f}%) - Revisar si es normal para este tipo de encuesta"
+                    f"⚠️ ATENCIÓN: {duplicados_parciales} duplicados parciales ({porcentaje:.2f}%)"
                 )
             else:
                 info_duplicados['recomendaciones'].append(
-                    f"ℹ️ INFO: {duplicados_parciales} duplicados parciales ({porcentaje_dup_parc:.2f}%) - Nivel normal para encuestas"
+                    f"ℹ️ INFO: {duplicados_parciales} duplicados parciales ({porcentaje:.2f}%) - Normal"
                 )
         else:
-            info_duplicados['recomendaciones'].append("✅ No hay duplicados en variables clave")
-    else:
-        info_duplicados['recomendaciones'].append(
-            f"⚠️ Solo {len(variables_clave_existentes)} variables clave encontradas - Análisis de duplicados parciales limitado"
-        )
+            info_duplicados['recomendaciones'].append("✅ No hay duplicados parciales")
     
     return info_duplicados
 
@@ -412,7 +269,6 @@ st.sidebar.markdown("""
 <div class="info-box">
     <h4>ℹ️ Factor de Expansión</h4>
     <p>Este dashboard aplica el <b>FACTOR DE EXPANSIÓN</b> en todos los análisis para garantizar representatividad estadística.</p>
-    <p><small>Cada encuestado representa a un grupo de la población total según su peso muestral.</small></p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -422,53 +278,32 @@ st.sidebar.markdown("""
 
 @st.cache_data
 def load_and_process_data():
-    """
-    Carga y procesa los datos culturales desde el archivo Excel.
-    
-    PROCESO PASO A PASO:
-    1. Carga el archivo cultura.xlsx
-    2. Valida y limpia el factor de expansión
-    3. Crea variables derivadas (grupos de edad, ingresos)
-    4. Convierte variables SI/NO a numéricas
-    5. Calcula índices de participación cultural
-    6. Maneja errores y casos especiales
-    
-    Retorna:
-    --------
-    pandas.DataFrame: DataFrame procesado y listo para análisis
-    """
+    """Carga y procesa los datos culturales desde el archivo Excel."""
     try:
-        # PASO 1: CARGAR DATOS
         st.info("📂 Cargando datos desde cultura.xlsx...")
         data = pd.read_excel('cultura.xlsx')
         df = pd.DataFrame(data)
         
-        # PASO 2: VALIDAR Y LIMPIAR FACTOR DE EXPANSIÓN
+        # Validar factor de expansión
         if 'FACTOR DE EXPANSION' in df.columns:
-            # Convertir a numérico, errores se convierten en NaN
             df['FACTOR DE EXPANSION'] = pd.to_numeric(df['FACTOR DE EXPANSION'], errors='coerce')
-            
-            # Contar valores problemáticos
             valores_nulos = df['FACTOR DE EXPANSION'].isnull().sum()
+            
             if valores_nulos > 0:
                 st.warning(f"⚠️ {valores_nulos} valores no válidos en FACTOR DE EXPANSION reemplazados con 1")
                 df['FACTOR DE EXPANSION'].fillna(1, inplace=True)
                 
-            # Validar que no haya valores negativos o cero
             valores_invalidos = (df['FACTOR DE EXPANSION'] <= 0).sum()
             if valores_invalidos > 0:
-                st.warning(f"⚠️ {valores_invalidos} valores ≤0 en FACTOR DE EXPANSION reemplazados con 1")
+                st.warning(f"⚠️ {valores_invalidos} valores ≤0 reemplazados con 1")
                 df.loc[df['FACTOR DE EXPANSION'] <= 0, 'FACTOR DE EXPANSION'] = 1
         else:
-            # Si no existe la columna, crear con valor 1
-            st.warning("⚠️ No se encontró FACTOR DE EXPANSION. Se asume valor 1 para todos los registros.")
+            st.warning("⚠️ No se encontró FACTOR DE EXPANSION. Se asume valor 1.")
             df['FACTOR DE EXPANSION'] = 1
         
-        # PASO 3: CREAR GRUPOS DE EDAD
+        # Crear grupos de edad
         if 'EDAD' in df.columns:
             df['EDAD'] = pd.to_numeric(df['EDAD'], errors='coerce')
-            
-            # Definir grupos etarios según estándares demográficos
             df['grupo_edad'] = pd.cut(
                 df['EDAD'], 
                 bins=[0, 12, 18, 28, 40, 60, 100],
@@ -477,25 +312,21 @@ def load_and_process_data():
                 include_lowest=True
             )
         
-        # PASO 4: CREAR GRUPOS DE INGRESO
+        # Crear grupos de ingreso
         if 'P2' in df.columns:
             df['P2'] = pd.to_numeric(df['P2'], errors='coerce')
             
-            # Solo crear grupos si hay datos válidos suficientes
             if not df['P2'].isna().all():
                 valid_incomes = df['P2'].dropna()
                 
-                if len(valid_incomes) > 10 and len(valid_incomes.unique()) >= 4:
+                if len(valid_incomes) > 10:
                     try:
-                        # Intentar quartiles primero
                         df['grupo_ingreso'] = pd.qcut(
-                            df['P2'], 
-                            q=4, 
+                            df['P2'], q=4, 
                             labels=['Bajo', 'Medio-Bajo', 'Medio-Alto', 'Alto'], 
                             duplicates='drop'
                         )
                     except ValueError:
-                        # Si hay muchos valores duplicados, usar percentiles manuales
                         percentiles = np.percentile(valid_incomes, [25, 50, 75])
                         df['grupo_ingreso'] = pd.cut(
                             df['P2'],
@@ -503,65 +334,49 @@ def load_and_process_data():
                             labels=['Bajo', 'Medio-Bajo', 'Medio-Alto', 'Alto'],
                             include_lowest=True
                         )
-                else:
-                    df['grupo_ingreso'] = 'Sin clasificar'
-            else:
-                df['grupo_ingreso'] = np.nan
         
-        # PASO 5: CONVERTIR VARIABLES SI/NO A NUMÉRICAS
+        # Convertir variables SI/NO a numéricas
         variables_convertidas = []
         for col in df.columns:
             if df[col].dtype == 'object':
-                # Obtener valores únicos limpiando espacios y convirtiendo a mayúsculas
                 unique_vals = set(df[col].dropna().astype(str).str.strip().str.upper().unique())
                 
-                # Verificar si es una variable SI/NO
-                if unique_vals.issubset({'SI', 'NO', 'SÍ'}):  # Incluir versión con acento
-                    # Crear columna numérica equivalente
+                if unique_vals.issubset({'SI', 'NO', 'SÍ'}):
                     col_num = f'{col.lower().replace(" ", "_")}_num'
                     df[col_num] = df[col].astype(str).str.strip().str.upper().map({
                         'SI': 1, 'SÍ': 1, 'NO': 0
                     })
-                    # Manejar valores NaN como 0 (no participación)
                     df[col_num] = df[col_num].fillna(0).astype(int)
                     variables_convertidas.append((col, col_num))
         
         if variables_convertidas:
-            st.success(f"✅ Convertidas {len(variables_convertidas)} variables SI/NO a numéricas")
+            st.success(f"✅ Convertidas {len(variables_convertidas)} variables SI/NO")
         
-        # PASO 6: CREAR ÍNDICE DE PARTICIPACIÓN CULTURAL
-        # Variables que típicamente indican participación cultural
+        # Crear índice cultural
         cultural_vars_base = [
             'P3', 'P4', 'P5', 'ASISTENCIA BIBLIOTECA', 'ASISTENCIA CASAS DE CULTURA',
             'ASISTENCIA CENTROS CUTURALES', 'ASISTENCIA MUSEOS', 'ASISTENCIA EXPOSICIONES',
             'ASISTENCIA MONUMENTOS', 'ASISTENCIA CURSOS', 'PRACTICA CULTURAL', 'LECTURA LIBROS'
         ]
         
-        # Identificar variables numéricas disponibles para el índice
         cultural_vars_numeric = []
         for var in cultural_vars_base:
             if var in df.columns:
                 if pd.api.types.is_numeric_dtype(df[var]):
                     cultural_vars_numeric.append(var)
                 else:
-                    # Buscar versión numérica creada anteriormente
                     var_num = f'{var.lower().replace(" ", "_")}_num'
                     if var_num in df.columns:
                         cultural_vars_numeric.append(var_num)
         
-        # Calcular índice cultural si hay variables disponibles
         if cultural_vars_numeric:
-            # Asegurar que todas las variables sean numéricas
             for col in cultural_vars_numeric:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             
-            # Sumar participación en diferentes actividades
             df['indice_cultural'] = df[cultural_vars_numeric].sum(axis=1, skipna=True)
             
-            # Crear niveles de participación
             max_possible = len(cultural_vars_numeric)
             if max_possible >= 3:
-                # Dividir en terciles
                 tercio_1 = max_possible / 3
                 tercio_2 = 2 * max_possible / 3
                 
@@ -572,19 +387,16 @@ def load_and_process_data():
                     include_lowest=True
                 )
             else:
-                # Si hay muy pocas variables, clasificación simple
                 df['nivel_participacion'] = df['indice_cultural'].apply(
                     lambda x: 'Alto' if x >= max_possible * 0.7 else ('Medio' if x >= max_possible * 0.3 else 'Bajo')
                 )
             
             st.success(f"✅ Índice cultural creado con {len(cultural_vars_numeric)} variables")
         else:
-            # Si no hay variables, crear valores por defecto
             df['indice_cultural'] = 0
             df['nivel_participacion'] = 'Sin datos'
-            st.warning("⚠️ No se encontraron variables para crear el índice cultural")
         
-        # PASO 7: CALCULAR POBLACIÓN REPRESENTADA
+        # Calcular población representada
         try:
             poblacion_total = df['FACTOR DE EXPANSION'].sum()
             df['poblacion_representada'] = df['FACTOR DE EXPANSION']
@@ -596,21 +408,18 @@ def load_and_process_data():
         return df
         
     except FileNotFoundError:
-        st.error("❌ No se encontró el archivo 'cultura.xlsx'. Asegúrate de que esté en la misma carpeta.")
+        st.error("❌ No se encontró el archivo 'cultura.xlsx'")
         return pd.DataFrame()
     except Exception as e:
         st.error(f"❌ Error al cargar los datos: {str(e)}")
-        st.error("Verifica que el archivo 'cultura.xlsx' tenga el formato correcto.")
         return pd.DataFrame()
 
 # =============================================================================
 # CARGAR DATOS PRINCIPALES
 # =============================================================================
 
-# Cargar datos con cache para mejor rendimiento
 df = load_and_process_data()
 
-# Verificar si hay datos cargados
 if df.empty:
     st.error("❌ No se pudieron cargar los datos. Verifica el archivo 'cultura.xlsx'.")
     st.stop()
@@ -622,7 +431,7 @@ if df.empty:
 if page == "🧹 Limpieza y Descriptivas":
     st.markdown('<div class="section-header"><h2>🧹 Limpieza y Estadísticas Descriptivas</h2></div>', unsafe_allow_html=True)
     
-    # SECCIÓN 1: INFORMACIÓN BÁSICA DEL DATASET
+    # Información básica del dataset
     st.markdown('<div class="plot-container">', unsafe_allow_html=True)
     st.subheader("📋 Información General del Dataset")
     
@@ -655,140 +464,91 @@ if page == "🧹 Limpieza y Descriptivas":
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # SECCIÓN 2: APLICAR LIMPIEZA AUTOMÁTICA
+    # Limpieza automática
     st.markdown('<div class="plot-container">', unsafe_allow_html=True)
     st.subheader("🔧 Limpieza Automática de Datos")
     
-    # Explicación del proceso de limpieza
     st.markdown("""
     <div class="info-box">
-    <h4>🔍 ¿Qué hace la limpieza automática?</h4>
+    <h4>🔍 Proceso de limpieza simplificado:</h4>
     <ol>
-    <li><strong>Elimina columnas con exceso de datos faltantes</strong> (>30% por defecto)</li>
-    <li><strong>Imputa valores categóricos</strong> faltantes con "NO INFORMACION"</li>
-    <li><strong>Imputa valores numéricos</strong> usando el método seleccionado (KNN por defecto)</li>
-    <li><strong>Genera un reporte detallado</strong> de todos los cambios realizados</li>
+    <li><strong>Elimina columnas</strong> con exceso de datos faltantes (>30% por defecto)</li>
+    <li><strong>Imputa variables categóricas</strong> faltantes con "NO INFORMACION"</li>
+    <li><strong>Conserva variables numéricas</strong> sin modificación (generalmente completas)</li>
+    <li><strong>Genera reporte detallado</strong> de todos los cambios realizados</li>
     </ol>
     </div>
     """, unsafe_allow_html=True)
     
-    # Configuración de parámetros de limpieza
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     
     with col1:
         umbral_na = st.slider(
             "🎯 Umbral para eliminar columnas (% de NAs)",
-            min_value=10, max_value=80, value=30, step=5,
-            help="Columnas con más de este porcentaje de valores faltantes serán eliminadas"
+            min_value=10, max_value=80, value=30, step=5
         )
     
     with col2:
-        metodo_numerico = st.selectbox(
-            "🔢 Método para imputar valores numéricos",
-            options=['knn', 'mediana', 'interpolacion', 'forward_fill'],
-            help="KNN usa vecinos cercanos, mediana es robusto, interpolación para series temporales"
-        )
-    
-    with col3:
-        if metodo_numerico == 'knn':
-            k_neighbors = st.number_input(
-                "🎯 Número de vecinos (K)",
-                min_value=1, max_value=20, value=5,
-                help="Número de registros similares a considerar para la imputación"
-            )
-        else:
-            k_neighbors = 5
-    
-    # Mostrar estado actual de limpieza
-    total_nas_actual = df.isnull().sum().sum()
-    porcentaje_nas_actual = (total_nas_actual / (len(df) * len(df.columns))) * 100
-    
-    col1, col2 = st.columns(2)
-    with col1:
+        total_nas_actual = df.isnull().sum().sum()
         if total_nas_actual == 0:
             st.markdown("""
             <div class="success-box">
             <h4>✅ Datos ya están limpios</h4>
-            <p>No se detectaron valores faltantes en el dataset actual.</p>
+            <p>No se detectaron valores faltantes.</p>
             </div>
             """, unsafe_allow_html=True)
         else:
+            porcentaje_nas = (total_nas_actual / (len(df) * len(df.columns))) * 100
             st.markdown(f"""
             <div class="warning-box">
             <h4>⚠️ Datos requieren limpieza</h4>
-            <p>Se detectaron <strong>{total_nas_actual:,}</strong> valores faltantes ({porcentaje_nas_actual:.2f}%)</p>
+            <p><strong>{total_nas_actual:,}</strong> valores faltantes ({porcentaje_nas:.2f}%)</p>
             </div>
             """, unsafe_allow_html=True)
     
-    with col2:
-        # Botón para aplicar limpieza
-        if st.button("🧹 Aplicar Limpieza Automática", type="primary", key="clean_data"):
-            with st.spinner("🔄 Procesando limpieza de datos..."):
-                # Aplicar la función de limpieza
-                df_cleaned, info_limpieza = limpiar_e_imputar_datos(
-                    df, 
-                    umbral_na=umbral_na/100, 
-                    metodo_numerico=metodo_numerico,
-                    k_neighbors=k_neighbors
-                )
-                
-                # Actualizar el dataframe (en una implementación real, esto debería manejarse con session state)
-                # df = df_cleaned  # Comentado para evitar problemas con st.cache_data
-                
-                # Mostrar resultados
-                mostrar_resultados_limpieza(info_limpieza)
-                
-                st.success("✅ ¡Limpieza completada exitosamente!")
+    if st.button("🧹 Aplicar Limpieza Automática", type="primary"):
+        with st.spinner("🔄 Procesando limpieza..."):
+            df_cleaned, info_limpieza = limpiar_datos_categoricos(df, umbral_na=umbral_na/100)
+            mostrar_resultados_limpieza(info_limpieza)
+            st.success("✅ ¡Limpieza completada!")
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # SECCIÓN 3: ANÁLISIS DE VALORES FALTANTES
+    # Análisis de valores faltantes
     st.markdown('<div class="plot-container">', unsafe_allow_html=True)
     st.subheader("🔥 Análisis de Valores Faltantes")
     
-    # Calcular estadísticas de valores faltantes
     missing_data = pd.DataFrame({
         'Variable': df.columns,
         'Valores_Faltantes': df.isnull().sum(),
         'Porcentaje_Faltante': (df.isnull().sum() / len(df)) * 100,
         'Tipo_Dato': df.dtypes,
         'Valores_Únicos': [df[col].nunique() for col in df.columns]
-    })
-    missing_data = missing_data.sort_values('Porcentaje_Faltante', ascending=False)
+    }).sort_values('Porcentaje_Faltante', ascending=False)
     
-    # Filtrar solo variables con valores faltantes para visualización
     missing_data_filtered = missing_data[missing_data['Porcentaje_Faltante'] > 0]
     
     if not missing_data_filtered.empty:
-        # Gráfico de barras para variables con más valores faltantes
         fig = px.bar(
             missing_data_filtered.head(20),
-            x='Variable',
-            y='Porcentaje_Faltante',
+            x='Variable', y='Porcentaje_Faltante',
             color='Porcentaje_Faltante',
             color_continuous_scale='Reds',
-            title="Top 20 Variables con Mayor Porcentaje de Datos Faltantes",
-            labels={'Porcentaje_Faltante': 'Porcentaje de Datos Faltantes (%)'}
+            title="Top 20 Variables con Mayor Porcentaje de Datos Faltantes"
         )
         
         fig.update_layout(
-            xaxis_title="Variables",
-            yaxis_title="Porcentaje de Datos Faltantes (%)",
-            font=dict(size=11),
-            xaxis_tickangle=-45,
-            height=500,
-            showlegend=False
+            xaxis_tickangle=-45, height=500, showlegend=False
         )
         
-        # Añadir líneas de referencia para interpretación
         fig.add_hline(y=50, line_dash="dash", line_color="red", 
-                     annotation_text="Crítico (>50%)", annotation_position="top right")
+                     annotation_text="Crítico (>50%)")
         fig.add_hline(y=20, line_dash="dash", line_color="orange", 
-                     annotation_text="Moderado (>20%)", annotation_position="top right")
+                     annotation_text="Moderado (>20%)")
         
         st.plotly_chart(fig, use_container_width=True)
         
-        # Interpretación automática
+        # Interpretación
         criticas = missing_data_filtered[missing_data_filtered['Porcentaje_Faltante'] > 50]
         moderadas = missing_data_filtered[(missing_data_filtered['Porcentaje_Faltante'] > 20) & 
                                         (missing_data_filtered['Porcentaje_Faltante'] <= 50)]
@@ -799,8 +559,7 @@ if page == "🧹 Limpieza y Descriptivas":
             st.markdown(f"""
             <div class="metric-card" style="border-left-color: #dc3545;">
             <h4>🔴 Variables Críticas</h4>
-            <p><strong>{len(criticas)}</strong> variables con >50% de NAs</p>
-            <small>Recomendación: Eliminar del análisis</small>
+            <p><strong>{len(criticas)}</strong> variables con >50% NAs</p>
             </div>
             """, unsafe_allow_html=True)
         
@@ -808,8 +567,7 @@ if page == "🧹 Limpieza y Descriptivas":
             st.markdown(f"""
             <div class="metric-card" style="border-left-color: #ffc107;">
             <h4>🟡 Variables Moderadas</h4>
-            <p><strong>{len(moderadas)}</strong> variables con 20-50% de NAs</p>
-            <small>Recomendación: Investigar patrón</small>
+            <p><strong>{len(moderadas)}</strong> variables con 20-50% NAs</p>
             </div>
             """, unsafe_allow_html=True)
         
@@ -817,138 +575,52 @@ if page == "🧹 Limpieza y Descriptivas":
             st.markdown(f"""
             <div class="metric-card" style="border-left-color: #28a745;">
             <h4>🟢 Variables Leves</h4>
-            <p><strong>{len(leves)}</strong> variables con <20% de NAs</p>
-            <small>Recomendación: Imputar valores</small>
+            <p><strong>{len(leves)}</strong> variables con <20% NAs</p>
             </div>
             """, unsafe_allow_html=True)
-            
     else:
         st.markdown("""
         <div class="success-box">
         <h3>🎉 ¡Excelente!</h3>
-        <p>No se detectaron valores faltantes en el dataset. Los datos están completos y listos para análisis.</p>
+        <p>No se detectaron valores faltantes. Los datos están completos.</p>
         </div>
         """, unsafe_allow_html=True)
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # SECCIÓN 4: TABLA DETALLADA DE INFORMACIÓN POR VARIABLE
+    # Análisis de duplicados
     st.markdown('<div class="plot-container">', unsafe_allow_html=True)
-    st.subheader("📊 Tabla Detallada por Variable")
+    st.subheader("🔍 Análisis de Duplicados")
     
-    # Crear tabla completa con información detallada
-    detailed_info = pd.DataFrame({
-        'Variable': df.columns,
-        'Tipo_Dato': df.dtypes.astype(str),
-        'Registros_Totales': len(df),
-        'Valores_Únicos': [df[col].nunique() for col in df.columns],
-        'Valores_Faltantes': df.isnull().sum(),
-        'Porcentaje_Faltante': round((df.isnull().sum() / len(df)) * 100, 2),
-        'Valores_Completos': len(df) - df.isnull().sum(),
-        'Porcentaje_Completo': round(((len(df) - df.isnull().sum()) / len(df)) * 100, 2)
-    })
-    
-    # Añadir clasificación de calidad
-    def clasificar_calidad(porcentaje_faltante):
-        if porcentaje_faltante == 0:
-            return "🟢 Excelente"
-        elif porcentaje_faltante <= 5:
-            return "🟢 Muy Buena"
-        elif porcentaje_faltante <= 20:
-            return "🟡 Buena"
-        elif porcentaje_faltante <= 50:
-            return "🟠 Regular"
-        else:
-            return "🔴 Crítica"
-    
-    detailed_info['Calidad'] = detailed_info['Porcentaje_Faltante'].apply(clasificar_calidad)
-    
-    # Mostrar tabla interactiva
-    st.dataframe(
-        detailed_info, 
-        use_container_width=True, 
-        height=400,
-        column_config={
-            "Porcentaje_Faltante": st.column_config.ProgressColumn(
-                "% Faltante",
-                help="Porcentaje de valores faltantes",
-                min_value=0,
-                max_value=100,
-            ),
-            "Porcentaje_Completo": st.column_config.ProgressColumn(
-                "% Completo",
-                help="Porcentaje de valores completos",
-                min_value=0,
-                max_value=100,
-            )
-        }
-    )
-    
-    # Resumen estadístico
-    st.markdown("### 📈 Resumen Estadístico de Calidad de Datos")
-    
-    calidad_counts = detailed_info['Calidad'].value_counts()
-    
-    cols = st.columns(len(calidad_counts))
-    for i, (calidad, count) in enumerate(calidad_counts.items()):
-        with cols[i]:
-            st.metric(calidad, f"{count} variables")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # SECCIÓN 5: ANÁLISIS DETALLADO DE DUPLICADOS
-    st.markdown('<div class="plot-container">', unsafe_allow_html=True)
-    st.subheader("🔍 Análisis Detallado de Duplicados")
-    
-    # Explicación pedagógica sobre duplicados
     st.markdown("""
     <div class="info-box">
-    <h4>📚 ¿Qué son los duplicados y por qué importan?</h4>
+    <h4>📚 Tipos de duplicados:</h4>
     <ul>
-    <li><strong>Duplicados completos:</strong> Filas idénticas en todas las columnas. Usualmente indican errores de captura.</li>
-    <li><strong>Duplicados parciales:</strong> Registros con mismas características demográficas (edad, sexo, educación, etc.).</li>
-    <li><strong>En encuestas:</strong> Algunos duplicados parciales son normales (personas con características similares).</li>
-    <li><strong>Problema:</strong> Duplicados completos sesgan los resultados y deben ser eliminados.</li>
+    <li><strong>Duplicados completos:</strong> Filas idénticas en todas las columnas</li>
+    <li><strong>Duplicados parciales:</strong> Mismas características demográficas</li>
+    <li><strong>En encuestas:</strong> Algunos duplicados parciales son normales</li>
     </ul>
     </div>
     """, unsafe_allow_html=True)
     
-    # Realizar análisis detallado de duplicados
-    info_duplicados = analizar_duplicados_detallado(df)
+    info_duplicados = analizar_duplicados(df)
     
-    # Mostrar métricas principales
     col1, col2, col3 = st.columns(3)
     
     with col1:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        duplicados_completos = info_duplicados['duplicados_completos']
-        st.metric("🔴 Duplicados Completos", duplicados_completos)
-        if duplicados_completos > 0:
-            porcentaje = (duplicados_completos / len(df)) * 100
-            st.markdown(f"<small>{porcentaje:.2f}% del total</small>", unsafe_allow_html=True)
+        st.metric("🔴 Duplicados Completos", info_duplicados['duplicados_completos'])
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        duplicados_parciales = info_duplicados['duplicados_parciales']
-        st.metric("🟡 Duplicados Parciales", duplicados_parciales)
-        if duplicados_parciales > 0:
-            porcentaje = (duplicados_parciales / len(df)) * 100
-            st.markdown(f"<small>{porcentaje:.2f}% del total</small>", unsafe_allow_html=True)
+        st.metric("🟡 Duplicados Parciales", info_duplicados['duplicados_parciales'])
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col3:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        variables_clave = len(info_duplicados['variables_clave_encontradas'])
-        st.metric("🔑 Variables Clave", variables_clave)
-        st.markdown(f"<small>Para análisis parcial</small>", unsafe_allow_html=True)
+        st.metric("🔑 Variables Clave", len(info_duplicados['variables_clave_encontradas']))
         st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Mostrar variables clave encontradas
-    if info_duplicados['variables_clave_encontradas']:
-        st.markdown("**🔑 Variables clave encontradas para análisis de duplicados parciales:**")
-        variables_str = ", ".join(info_duplicados['variables_clave_encontradas'])
-        st.markdown(f"*{variables_str}*")
     
     # Mostrar recomendaciones
     st.markdown("### 💡 Recomendaciones")
@@ -1007,60 +679,6 @@ if page == "🧹 Limpieza y Descriptivas":
     </ul>
     </div>
     """, unsafe_allow_html=True)
-    
-    if 'FACTOR DE EXPANSION' in df.columns:
-        factor_stats = df['FACTOR DE EXPANSION'].describe()
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("📊 Media", f"{factor_stats['mean']:.2f}")
-        with col2:
-            st.metric("📈 Mediana", f"{factor_stats['50%']:.2f}")
-        with col3:
-            st.metric("📉 Mínimo", f"{factor_stats['min']:.2f}")
-        with col4:
-            st.metric("📈 Máximo", f"{factor_stats['max']:.2f}")
-        
-        # Distribución del factor de expansión
-        fig = px.histogram(
-            df, 
-            x='FACTOR DE EXPANSION',
-            nbins=50,
-            title="Distribución del Factor de Expansión",
-            labels={'FACTOR DE EXPANSION': 'Factor de Expansión', 'count': 'Frecuencia'},
-            color_discrete_sequence=['#6a0dad']
-        )
-        
-        fig.update_layout(
-            showlegend=False,
-            height=400
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Verificar problemas en el factor de expansión
-        factor_nulos = df['FACTOR DE EXPANSION'].isnull().sum()
-        factor_ceros = (df['FACTOR DE EXPANSION'] == 0).sum()
-        factor_negativos = (df['FACTOR DE EXPANSION'] < 0).sum()
-        
-        if factor_nulos > 0 or factor_ceros > 0 or factor_negativos > 0:
-            st.markdown("### ⚠️ Problemas Detectados en Factor de Expansión")
-            
-            if factor_nulos > 0:
-                st.warning(f"🔴 {factor_nulos} valores nulos detectados")
-            if factor_ceros > 0:
-                st.warning(f"🔴 {factor_ceros} valores igual a cero detectados")
-            if factor_negativos > 0:
-                st.warning(f"🔴 {factor_negativos} valores negativos detectados")
-                
-            st.info("💡 Estos valores se reemplazan automáticamente con 1 para mantener la integridad del análisis")
-        else:
-            st.success("✅ Factor de expansión sin problemas detectados")
-    else:
-        st.warning("⚠️ No se encontró la columna 'FACTOR DE EXPANSION' en los datos")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
     
     # Análisis de variables categóricas
     st.markdown('<div class="plot-container">', unsafe_allow_html=True)
@@ -1898,10 +1516,6 @@ elif page == "📚 Actividades Específicas":
         'Bibliotecas': 'ASISTENCIA BIBLIOTECA',
         'Casas de Cultura': 'ASISTENCIA CASAS DE CULTURA',
         'Centros Culturales': 'ASISTENCIA CENTROS CUTURALES',
-        'Museos': 'ASISTENCIA MUSEOS',
-        'Exposiciones y Galerías': 'ASISTENCIA EXPOSICIONES',
-        'Monumentos Históricos': 'ASISTENCIA MONUMENTOS',
-        'Cursos y Talleres': 'ASISTENCIA CURSOS',
         'Lectura de Libros': 'LECTURA LIBROS'
     }
     
